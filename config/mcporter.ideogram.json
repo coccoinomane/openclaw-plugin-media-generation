@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ideogram": {
+      "baseUrl": "https://mcp.ideogram.ai/mcp",
+      "auth": "oauth",
+      "oauthRedirectUrl": "http://127.0.0.1:54321/callback",
+      "headers": {
+        "accept": "application/json, text/event-stream"
+      }
+    }
+  },
+  "imports": []
+}

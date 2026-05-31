@@ -1,0 +1,25 @@
+{
+  "id": "media-generation",
+  "name": "Media Generation",
+  "description": "Portable media-generation workflow, dedicated media agent template, and optional Ideogram MCP wrapper.",
+  "version": "0.2.5",
+  "skills": [
+    "skills"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "commandAliases": [
+    {
+      "name": "media-generation"
+    }
+  ],
+  "activation": {
+    "onStartup": false,
+    "onCommands": [
+      "media-generation"
+    ]
+  }
+}

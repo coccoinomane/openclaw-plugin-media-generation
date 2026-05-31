@@ -1,0 +1,25 @@
+{
+  "name": "openclaw-plugin-media-generation",
+  "version": "0.2.5",
+  "private": false,
+  "description": "Portable OpenClaw media generation workflow, CLI setup helper, media agent template, and Ideogram MCP wrapper.",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "bin": {
+    "ideogram": "./bin/ideogram"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coccoinomane/openclaw-plugin-media-generation.git"
+  },
+  "homepage": "https://github.com/coccoinomane/openclaw-plugin-media-generation#readme",
+  "bugs": {
+    "url": "https://github.com/coccoinomane/openclaw-plugin-media-generation/issues"
+  }
+}

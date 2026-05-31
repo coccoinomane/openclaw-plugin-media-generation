@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "$source" ]]; do
+    local dir target
+    dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+    target="$(readlink "$source")"
+    if [[ "$target" == /* ]]; then
+      source="$target"
+    else
+      source="$dir/$target"
+    fi
+  done
+  cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
+DEFAULT_CONFIG="$PLUGIN_ROOT/config/mcporter.ideogram.json"
+FALLBACK_CONFIG="$HOME/.openclaw/plugins/media-generation/config/mcporter.ideogram.json"
+if [[ -n "${MCPORTER_CONFIG:-}" ]]; then
+  CONFIG_PATH="$MCPORTER_CONFIG"
+elif [[ -f "$DEFAULT_CONFIG" ]]; then
+  CONFIG_PATH="$DEFAULT_CONFIG"
+elif [[ -f "$FALLBACK_CONFIG" ]]; then
+  CONFIG_PATH="$FALLBACK_CONFIG"
+else
+  CONFIG_PATH="$DEFAULT_CONFIG"
+fi
+SERVER="${IDEOGRAM_MCP_SERVER:-ideogram}"
+OUT_DIR="${IDEOGRAM_OUT_DIR:-$PWD/out/ideogram}"
+
+usage() {
+  cat <<'EOF_USAGE'
+ideogram — mcporter wrapper for the official Ideogram MCP
+
+Usage:
+  ideogram help|--help|-h
+  ideogram doctor
+  ideogram schema
+  ideogram tools
+  ideogram auth [mcporter auth args...]
+  ideogram call TOOL [mcporter call args...]
+  ideogram raw [mcporter args...]
+
+Examples:
+  ideogram auth
+  ideogram tools
+  ideogram call get_recent_generations --args '{"n":1}'
+  ideogram call generate_image --args '{"prompt":"minimal black cat logo","aspect_ratio":"1x1"}'
+
+Environment:
+  MCPORTER_CONFIG       mcporter config path override
+  IDEOGRAM_MCP_SERVER   server name in that config; default: ideogram
+  IDEOGRAM_OUT_DIR      image save directory; default: ./out/ideogram from current directory
+
+Notes:
+  - Requires the mcporter executable.
+  - Uses Ideogram MCP OAuth; run ideogram auth once on a new machine/account.
+  - No credentials are bundled in this plugin. mcporter stores OAuth credentials separately.
+EOF_USAGE
+  printf '\nResolved defaults:\n  config: %s\n  server: %s\n  output: %s\n' "$CONFIG_PATH" "$SERVER" "$OUT_DIR"
+}
+
+require_mcporter() {
+  if ! command -v mcporter >/dev/null 2>&1; then
+    echo "ideogram: mcporter executable not found in PATH" >&2
+    echo "Install mcporter or use the native image_generate fallback." >&2
+    exit 127
+  fi
+}
+
+case "${1:-help}" in
+  help|--help|-h)
+    usage
+    ;;
+  doctor)
+    require_mcporter
+    echo "Ideogram MCP wrapper doctor"
+    echo "- mcporter: $(command -v mcporter)"
+    echo "- config: $CONFIG_PATH"
+    echo "- server: $SERVER"
+    echo "- output: $OUT_DIR"
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+      echo "- config file: missing" >&2
+      exit 1
+    fi
+    echo "- config file: present"
+    if mcporter --config "$CONFIG_PATH" config get "$SERVER" >/dev/null 2>&1; then
+      echo "- server definition: ok"
+    else
+      echo "- server definition: missing or invalid" >&2
+      exit 1
+    fi
+    if mcporter --config "$CONFIG_PATH" list "$SERVER" >/dev/null 2>&1; then
+      echo "- auth/schema: ok"
+    else
+      echo "- auth/schema: not ready. Run: ideogram auth" >&2
+      exit 1
+    fi
+    ;;
+  schema)
+    require_mcporter
+    mcporter --config "$CONFIG_PATH" list "$SERVER" --schema
+    ;;
+  tools)
+    require_mcporter
+    mcporter --config "$CONFIG_PATH" list "$SERVER"
+    ;;
+  auth)
+    require_mcporter
+    shift
+    mcporter --config "$CONFIG_PATH" auth "$SERVER" "$@"
+    ;;
+  call)
+    require_mcporter
+    shift
+    tool="${1:-}"
+    if [[ -z "$tool" ]]; then
+      echo "ideogram: missing TOOL. Try: ideogram schema" >&2
+      exit 2
+    fi
+    shift
+    mkdir -p "$OUT_DIR"
+    mcporter --config "$CONFIG_PATH" call "$SERVER.$tool" --save-images "$OUT_DIR" --output json "$@"
+    ;;
+  raw)
+    require_mcporter
+    shift
+    mcporter --config "$CONFIG_PATH" "$@"
+    ;;
+  *)
+    echo "ideogram: unknown command '$1'. Try: ideogram help" >&2
+    exit 2
+    ;;
+esac
