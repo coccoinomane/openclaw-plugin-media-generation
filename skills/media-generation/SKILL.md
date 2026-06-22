@@ -74,6 +74,13 @@ User: “Genera un logo con le lettere GP usando sia OpenAI sia Gemini”
 ## Relay
 
 - Send or attach generated media back to the user when the channel supports it.
+- Before relaying generated image/logo/graphic results, verify that the media agent returned:
+  - output path or media URL
+  - tool used
+  - provider/model used, when applicable
+  - complete effective prompt, when an LLM image tool was used
+  - transparency notes/fallbacks/deviations
+- If any required detail is missing, do not relay the image as final yet. Ask/fetch the missing details from the media subagent first.
 - Include concise labels: model/provider + complete effective prompt.
 - Include concise transparency notes when anything deviated from the preferred/requested path; if everything went normally, keep it terse.
 - If generation failed, report the exact blocker and the smallest useful next option.
