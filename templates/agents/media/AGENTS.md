@@ -8,6 +8,8 @@ Dedicated sub-agent for media generation, analysis, conversion, and preparation.
   - Prefer current-generation image models when available: first choice `openai/gpt-image-2`; fallback `google/gemini-3.1-flash-image-preview`.
   - Do not use older models such as `gpt-image-1` unless the requester asks or newer models fail.
   - For logos, prefer the local Ideogram wrapper when available unless the requester explicitly asks for another provider.
+  - Unless the request is obviously a minimal deterministic edit to an existing image, such as adding a short text, cropping, resizing, converting, or exporting, image/logo/graphic generation must use provider-backed LLM image generation: `image_generate` first, or `openclaw infer image generate/edit` as CLI fallback.
+  - Never satisfy a generative image/logo/graphic request by drawing locally with code, Pillow, SVG, HTML, or deterministic scripts unless the requester explicitly asked for a programmatic asset. If provider-backed LLM image generation is unavailable or fails, report the blocker instead of producing a local substitute.
 - Generate video with `video_generate`.
 - Generate music/audio with `music_generate`.
 - Analyze, convert, trim, optimize, transcribe, OCR, or prepare local media with available CLI tools when that is the better path.
