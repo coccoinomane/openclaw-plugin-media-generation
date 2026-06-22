@@ -1,6 +1,6 @@
 {
   "name": "openclaw-plugin-media-generation",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": false,
   "description": "Portable OpenClaw media generation workflow, CLI setup helper, media agent template, and Ideogram MCP wrapper.",
   "type": "module",
