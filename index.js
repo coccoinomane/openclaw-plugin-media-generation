@@ -1,7 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, copyFileSync, statSync, chmodSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   computeAgentPatch,
@@ -11,134 +10,19 @@ import {
   readAgentRoster,
   rosterAgentRecords,
 } from "./lib/agent-config.js";
+import { copyTemplates, inspectTemplates, legacyWorkspaceFiles } from "./lib/workspace.js";
 
 const PLUGIN_ID = "media-generation";
 const DEFAULT_AGENT_ID = "media";
 const DEFAULT_WORKSPACE = "~/.openclaw/workspace-media";
-const TEMPLATE_FILES = ["AGENTS.md"];
-const OPTIONAL_IDEOGRAM_FILES = [
-  { name: "bin/ideogram", source: ["bin", "ideogram"], target: ["bin", "ideogram"], mode: 0o755 },
-  { name: "config/mcporter.ideogram.json", source: ["config", "mcporter.ideogram.json"], target: ["config", "mcporter.ideogram.json"] },
-];
 
 function pluginRoot() {
   return dirname(fileURLToPath(import.meta.url));
 }
 
-function expandHome(path) {
-  if (!path || path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  return path;
-}
-
-function sameFileContent(source, target) {
-  if (!existsSync(target)) return false;
-  try {
-    if (!statSync(target).isFile()) return false;
-    return readFileSync(source, "utf8") === readFileSync(target, "utf8");
-  } catch {
-    return false;
-  }
-}
-
 function repeatOption(value, previous) {
   previous.push(value);
   return previous;
-}
-
-function samePath(a, b) {
-  return resolve(expandHome(a)) === resolve(expandHome(b));
-}
-
-function workspaceFileSet({ workspace, installIdeogramBin = false }) {
-  const root = pluginRoot();
-  const workspaceDir = resolve(expandHome(workspace));
-  const templateSourceDir = join(root, "templates", "agents", "media");
-  const files = TEMPLATE_FILES.map((name) => ({
-    name,
-    source: join(templateSourceDir, name),
-    target: join(workspaceDir, name),
-    kind: "template",
-  }));
-
-  if (installIdeogramBin) {
-    for (const file of OPTIONAL_IDEOGRAM_FILES) {
-      files.push({
-        name: file.name,
-        source: join(root, ...file.source),
-        target: join(workspaceDir, ...file.target),
-        kind: "ideogram",
-        mode: file.mode,
-      });
-    }
-  }
-
-  return files;
-}
-
-function legacyWorkspaceFiles({ workspace }) {
-  const workspaceDir = resolve(expandHome(workspace));
-  return [{ name: "TOOLS.md", target: join(workspaceDir, "TOOLS.md"), kind: "legacy-template" }];
-}
-
-function inspectTemplates({ workspace, installIdeogramBin = false }) {
-  return workspaceFileSet({ workspace, installIdeogramBin }).map((file) => {
-    const sourceExists = existsSync(file.source);
-    const targetExists = existsSync(file.target);
-    let modeOk = true;
-    if (targetExists && file.mode !== undefined) {
-      try {
-        modeOk = (statSync(file.target).mode & 0o777) === file.mode;
-      } catch {
-        modeOk = false;
-      }
-    }
-    const identical = sourceExists && targetExists && sameFileContent(file.source, file.target) && modeOk;
-    return { ...file, sourceExists, targetExists, modeOk, identical };
-  });
-}
-
-function copyTemplates({ workspace, dryRun = false, force = false, installIdeogramBin = false }) {
-  const files = inspectTemplates({ workspace, installIdeogramBin });
-  const missingSources = files.filter((file) => !file.sourceExists);
-  if (missingSources.length > 0) {
-    throw new Error(`Plugin setup source files are missing: ${missingSources.map((file) => file.source).join(", ")}`);
-  }
-
-  const conflicts = files.filter((file) => file.targetExists && !file.identical && file.kind !== "template");
-  if (conflicts.length > 0 && !force) {
-    throw new Error(`Workspace already contains different file(s): ${conflicts.map((file) => file.target).join(", ")}. Re-run with --force to overwrite them.`);
-  }
-
-  const workspaceDir = resolve(expandHome(workspace));
-  const backupStamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const backups = [];
-  if (!dryRun) {
-    mkdirSync(workspaceDir, { recursive: true });
-    for (const file of files) {
-      if (file.identical || (!force && file.targetExists)) continue;
-      mkdirSync(dirname(file.target), { recursive: true });
-      if (force && file.targetExists) {
-        const backup = join(workspaceDir, ".openclaw-media-backups", backupStamp, file.name);
-        mkdirSync(dirname(backup), { recursive: true });
-        copyFileSync(file.target, backup);
-        backups.push(backup);
-      }
-      copyFileSync(file.source, file.target);
-      if (file.mode !== undefined) chmodSync(file.target, file.mode);
-    }
-  } else {
-    for (const file of files) {
-      if (!file.identical && force && file.targetExists) backups.push(join(workspaceDir, ".openclaw-media-backups", backupStamp, file.name));
-    }
-  }
-
-  return files.map((file) => ({
-    file: file.name,
-    target: file.target,
-    action: file.identical ? "unchanged" : !force && file.targetExists && file.kind === "template" ? "preserved" : file.targetExists ? "overwrite" : "create",
-    backups: backups.filter((backup) => backup.endsWith(`/${file.name}`)),
-  }));
 }
 
 function setupCommandPreview(opts) {
@@ -163,7 +47,7 @@ function registerMediaGenerationCli({ program, config }, api) {
       const records = rosterAgentRecords(config, rosterOptions);
       const agent = records.find(({ id }) => id === opts.agentId)?.agent;
       const roster = readAgentRoster(config, rosterOptions);
-      const templates = inspectTemplates({ workspace: opts.workspace, installIdeogramBin: Boolean(opts.installIdeogramBin) });
+      const templates = inspectTemplates({ pluginRoot: pluginRoot(), workspace: opts.workspace, installIdeogramBin: Boolean(opts.installIdeogramBin) });
       const legacyTools = legacyWorkspaceFiles({ workspace: opts.workspace }).filter((file) => existsSync(file.target));
       const allowance = hasSpawnAllowance(config, opts.agentId, rosterOptions);
 
@@ -230,6 +114,7 @@ function registerMediaGenerationCli({ program, config }, api) {
       }
 
       const templateActions = copyTemplates({
+        pluginRoot: pluginRoot(),
         workspace: opts.workspace,
         dryRun: true,
         force: Boolean(opts.force),
@@ -247,6 +132,7 @@ function registerMediaGenerationCli({ program, config }, api) {
       }
 
       copyTemplates({
+        pluginRoot: pluginRoot(),
         workspace: opts.workspace,
         dryRun: false,
         force: Boolean(opts.force),
