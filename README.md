@@ -5,10 +5,9 @@ Portable OpenClaw plugin for a dedicated media-generation workflow.
 Ships:
 
 - `skills/media-generation/SKILL.md` — caller-side routing and prompt-hygiene rules.
-- `templates/agents/media/AGENTS.md` — bootstrap instructions for a dedicated `media` agent, including transparency/deviation logging.
-- `templates/agents/media/TOOLS.md` — local CLI/provider notes for the media workspace.
+- `templates/agents/media/AGENTS.md` — bootstrap instructions and local CLI/provider notes for a dedicated `media` agent, including transparency/deviation logging.
 - `openclaw media-generation doctor` — checks whether the dedicated media agent is configured.
-- `openclaw media-generation setup-agent` — copies templates and patches `agents.list` explicitly.
+- `openclaw media-generation setup-agent` — copies the agent template and patches the configured agent roster explicitly (`agents.entries` on current OpenClaw, `agents.list` for legacy configs).
 - `bin/ideogram` — optional portable mcporter wrapper for the official Ideogram MCP.
 - `config/mcporter.ideogram.json` — bundled public MCP server definition for that wrapper.
 
@@ -105,7 +104,9 @@ openclaw media-generation setup-agent --dry-run
 openclaw media-generation setup-agent
 ```
 
-By default it copies templates to `~/.openclaw/workspace-media`, adds/updates the `media` entry in `agents.list`, and writes the config change through OpenClaw's runtime config mutation API.
+By default it copies the agent template to `~/.openclaw/workspace-media`, adds/updates the `media` entry in `agents.entries` on current OpenClaw (or `agents.list` when that legacy field is present), and writes the config change through OpenClaw's runtime config mutation API. When both roster fields exist, `agents.entries` is used and `agents.list` is left untouched.
+
+The old `TOOLS.md` template is retired. Existing workspace copies are preserved and reported by `doctor`; the new `AGENTS.md` template carries the same local tool notes. Existing customized `AGENTS.md` files are preserved by default. `setup-agent --force` backs up differing files under `.openclaw-media-backups/` before replacing them.
 
 Add `--install-ideogram-bin` if you also want a portable copy of the optional Ideogram wrapper and its bundled mcporter config in the media workspace:
 
@@ -130,16 +131,15 @@ If template or optional bin/config files already exist and differ, setup stops. 
 
 Restart or reload the Gateway after setup before testing new agent config.
 
-Manual equivalent: OpenClaw plugins expose skills, but they do not automatically create `agents.list[]` entries. Add/adapt a dedicated `media` agent in `openclaw.json` and copy/sync the template files into its workspace.
+Manual equivalent: OpenClaw plugins expose skills, but they do not automatically create agent entries. Add/adapt a dedicated `media` agent in `openclaw.json` and copy/sync the template into its workspace.
 
 Minimal example:
 
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "media",
+    entries: {
+      media: {
         workspace: "~/.openclaw/workspace-media",
         skills: [],
         tools: {
@@ -147,7 +147,7 @@ Minimal example:
           alsoAllow: ["group:media", "exec", "process"]
         }
       }
-    ]
+    }
   }
 }
 ```
@@ -157,5 +157,4 @@ Then copy templates:
 ```bash
 mkdir -p ~/.openclaw/workspace-media
 cp plugins/media-generation/templates/agents/media/AGENTS.md ~/.openclaw/workspace-media/AGENTS.md
-cp plugins/media-generation/templates/agents/media/TOOLS.md ~/.openclaw/workspace-media/TOOLS.md
 ```

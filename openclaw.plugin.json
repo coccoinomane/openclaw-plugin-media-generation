@@ -2,7 +2,7 @@
   "id": "media-generation",
   "name": "Media Generation",
   "description": "Portable media-generation workflow, dedicated media agent template, and optional Ideogram MCP wrapper.",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "skills": [
     "skills"
   ],
@@ -11,6 +11,13 @@
     "additionalProperties": false,
     "properties": {}
   },
+  "cliCommands": [
+    {
+      "name": "media-generation",
+      "description": "Set up and diagnose the OpenClaw media-generation agent template",
+      "hasSubcommands": true
+    }
+  ],
   "commandAliases": [
     {
       "name": "media-generation"

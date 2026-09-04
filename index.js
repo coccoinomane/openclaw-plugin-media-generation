@@ -3,19 +3,23 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  computeAgentPatch,
+  findMediaToolDenials,
+  hasSpawnAllowance,
+  mediaAgentIssues,
+  readAgentRoster,
+  rosterAgentRecords,
+} from "./lib/agent-config.js";
 
 const PLUGIN_ID = "media-generation";
 const DEFAULT_AGENT_ID = "media";
 const DEFAULT_WORKSPACE = "~/.openclaw/workspace-media";
-const TEMPLATE_FILES = ["AGENTS.md", "TOOLS.md"];
+const TEMPLATE_FILES = ["AGENTS.md"];
 const OPTIONAL_IDEOGRAM_FILES = [
   { name: "bin/ideogram", source: ["bin", "ideogram"], target: ["bin", "ideogram"], mode: 0o755 },
   { name: "config/mcporter.ideogram.json", source: ["config", "mcporter.ideogram.json"], target: ["config", "mcporter.ideogram.json"] },
 ];
-const DEFAULT_AGENT_SKILLS = [];
-const DEFAULT_AGENT_TOOL_PROFILE = "minimal";
-const DEFAULT_AGENT_TOOL_ALLOW = ["group:media", "exec", "process"];
-const LEGACY_AGENT_TOOL_POLICY_KEYS = ["allow", "elevated", "exec", "fs"];
 
 function pluginRoot() {
   return dirname(fileURLToPath(import.meta.url));
@@ -40,25 +44,6 @@ function sameFileContent(source, target) {
 function repeatOption(value, previous) {
   previous.push(value);
   return previous;
-}
-
-function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
-}
-
-function canonicalMediaAgentTools() {
-  return {
-    profile: DEFAULT_AGENT_TOOL_PROFILE,
-    alsoAllow: [...DEFAULT_AGENT_TOOL_ALLOW],
-  };
-}
-
-function jsonEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function uniqueStrings(values) {
-  return [...new Set(values.filter((value) => typeof value === "string" && value.length > 0))];
 }
 
 function samePath(a, b) {
@@ -91,6 +76,11 @@ function workspaceFileSet({ workspace, installIdeogramBin = false }) {
   return files;
 }
 
+function legacyWorkspaceFiles({ workspace }) {
+  const workspaceDir = resolve(expandHome(workspace));
+  return [{ name: "TOOLS.md", target: join(workspaceDir, "TOOLS.md"), kind: "legacy-template" }];
+}
+
 function inspectTemplates({ workspace, installIdeogramBin = false }) {
   return workspaceFileSet({ workspace, installIdeogramBin }).map((file) => {
     const sourceExists = existsSync(file.source);
@@ -108,142 +98,6 @@ function inspectTemplates({ workspace, installIdeogramBin = false }) {
   });
 }
 
-function mergeMediaAgentDefaults(existing, { agentId, workspace, force = false }) {
-  const agent = existing && typeof existing === "object" ? cloneJson(existing) : { id: agentId };
-  const errors = [];
-  let changed = false;
-
-  if (agent.id !== agentId) {
-    agent.id = agentId;
-    changed = true;
-  }
-
-  if (agent.workspace === undefined) {
-    agent.workspace = workspace;
-    changed = true;
-  } else if (!samePath(agent.workspace, workspace)) {
-    if (!force) {
-      errors.push(`Agent '${agentId}' already exists with workspace '${agent.workspace}'. Re-run with --force to update it to '${workspace}'.`);
-    } else {
-      agent.workspace = workspace;
-      changed = true;
-    }
-  }
-
-  if (agent.skills === undefined) {
-    agent.skills = [...DEFAULT_AGENT_SKILLS];
-    changed = true;
-  } else if (!Array.isArray(agent.skills)) {
-    if (!force) {
-      errors.push(`Agent '${agentId}' has non-array skills config; update it manually or re-run with --force.`);
-    } else {
-      agent.skills = [...DEFAULT_AGENT_SKILLS];
-      changed = true;
-    }
-  }
-
-  if (agent.tools === undefined) {
-    agent.tools = canonicalMediaAgentTools();
-    changed = true;
-  } else if (!agent.tools || typeof agent.tools !== "object" || Array.isArray(agent.tools)) {
-    if (!force) {
-      errors.push(`Agent '${agentId}' has non-object tools config; update it manually or re-run with --force.`);
-    } else {
-      agent.tools = canonicalMediaAgentTools();
-      changed = true;
-    }
-  } else if (force) {
-    const canonicalTools = canonicalMediaAgentTools();
-    if (!jsonEqual(agent.tools, canonicalTools)) {
-      agent.tools = canonicalTools;
-      changed = true;
-    }
-  } else {
-    const tools = { ...agent.tools };
-    if (tools.profile === undefined) {
-      tools.profile = DEFAULT_AGENT_TOOL_PROFILE;
-      changed = true;
-    } else if (tools.profile !== DEFAULT_AGENT_TOOL_PROFILE) {
-      errors.push(`Agent '${agentId}' tools.profile is '${tools.profile}', expected '${DEFAULT_AGENT_TOOL_PROFILE}'. Re-run with --force to update it.`);
-    }
-
-    if (tools.alsoAllow === undefined) {
-      tools.alsoAllow = [...DEFAULT_AGENT_TOOL_ALLOW];
-      changed = true;
-    } else if (!Array.isArray(tools.alsoAllow)) {
-      errors.push(`Agent '${agentId}' tools.alsoAllow is not an array; update it manually or re-run with --force.`);
-    } else {
-      const nextAllow = uniqueStrings([...tools.alsoAllow, ...DEFAULT_AGENT_TOOL_ALLOW]);
-      if (nextAllow.length !== tools.alsoAllow.length) {
-        tools.alsoAllow = nextAllow;
-        changed = true;
-      }
-    }
-
-    agent.tools = tools;
-  }
-
-  return { agent, changed, errors };
-}
-
-function resolveAllowCallers(config, { agentId, allowCallers = [], allowExistingAgents = false }) {
-  const currentAgents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
-  const existing = allowExistingAgents
-    ? currentAgents.map((agent) => agent?.id).filter((id) => typeof id === "string" && id !== agentId)
-    : [];
-  return uniqueStrings([...allowCallers, ...existing]);
-}
-
-function computeAgentPatch(config, { agentId, workspace, allowCallers = [], allowExistingAgents = false, force = false }) {
-  const currentAgents = Array.isArray(config?.agents?.list) ? cloneJson(config.agents.list) : [];
-  const agents = currentAgents.map((agent) => (agent && typeof agent === "object" ? agent : {}));
-  const errors = [];
-  let changed = false;
-
-  const existingIndex = agents.findIndex((agent) => agent.id === agentId);
-  if (existingIndex === -1) {
-    agents.push({
-      id: agentId,
-      workspace,
-      skills: [...DEFAULT_AGENT_SKILLS],
-      tools: canonicalMediaAgentTools(),
-    });
-    changed = true;
-  } else {
-    const merged = mergeMediaAgentDefaults(agents[existingIndex], { agentId, workspace, force });
-    agents[existingIndex] = merged.agent;
-    changed = changed || merged.changed;
-    errors.push(...merged.errors);
-  }
-
-  for (const callerId of resolveAllowCallers(config, { agentId, allowCallers, allowExistingAgents })) {
-    const callerIndex = agents.findIndex((agent) => agent.id === callerId);
-    if (callerIndex === -1) {
-      errors.push(`Caller agent '${callerId}' was not found in agents.list.`);
-      continue;
-    }
-    const caller = agents[callerIndex];
-    const currentAllow = caller.subagents?.allowAgents;
-    if (Array.isArray(currentAllow)) {
-      if (!currentAllow.includes("*") && !currentAllow.includes(agentId)) {
-        caller.subagents = { ...(caller.subagents ?? {}), allowAgents: [...currentAllow, agentId] };
-        changed = true;
-      }
-    } else if (currentAllow === undefined) {
-      caller.subagents = { ...(caller.subagents ?? {}), allowAgents: [agentId] };
-      changed = true;
-    } else {
-      errors.push(`Caller agent '${callerId}' has non-array subagents.allowAgents; update it manually.`);
-    }
-  }
-
-  return {
-    changed,
-    errors,
-    patch: { agents: { list: agents } },
-  };
-}
-
 function copyTemplates({ workspace, dryRun = false, force = false, installIdeogramBin = false }) {
   const files = inspectTemplates({ workspace, installIdeogramBin });
   const missingSources = files.filter((file) => !file.sourceExists);
@@ -251,60 +105,40 @@ function copyTemplates({ workspace, dryRun = false, force = false, installIdeogr
     throw new Error(`Plugin setup source files are missing: ${missingSources.map((file) => file.source).join(", ")}`);
   }
 
-  const conflicts = files.filter((file) => file.targetExists && !file.identical);
+  const conflicts = files.filter((file) => file.targetExists && !file.identical && file.kind !== "template");
   if (conflicts.length > 0 && !force) {
     throw new Error(`Workspace already contains different file(s): ${conflicts.map((file) => file.target).join(", ")}. Re-run with --force to overwrite them.`);
   }
 
+  const workspaceDir = resolve(expandHome(workspace));
+  const backupStamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backups = [];
   if (!dryRun) {
-    const workspaceDir = resolve(expandHome(workspace));
     mkdirSync(workspaceDir, { recursive: true });
     for (const file of files) {
-      if (file.identical) continue;
+      if (file.identical || (!force && file.targetExists)) continue;
       mkdirSync(dirname(file.target), { recursive: true });
+      if (force && file.targetExists) {
+        const backup = join(workspaceDir, ".openclaw-media-backups", backupStamp, file.name);
+        mkdirSync(dirname(backup), { recursive: true });
+        copyFileSync(file.target, backup);
+        backups.push(backup);
+      }
       copyFileSync(file.source, file.target);
       if (file.mode !== undefined) chmodSync(file.target, file.mode);
+    }
+  } else {
+    for (const file of files) {
+      if (!file.identical && force && file.targetExists) backups.push(join(workspaceDir, ".openclaw-media-backups", backupStamp, file.name));
     }
   }
 
   return files.map((file) => ({
     file: file.name,
     target: file.target,
-    action: file.identical ? "unchanged" : file.targetExists ? "overwrite" : "create",
+    action: file.identical ? "unchanged" : !force && file.targetExists && file.kind === "template" ? "preserved" : file.targetExists ? "overwrite" : "create",
+    backups: backups.filter((backup) => backup.endsWith(`/${file.name}`)),
   }));
-}
-
-function hasSpawnAllowance(config, agentId) {
-  const defaults = config?.agents?.defaults?.subagents?.allowAgents;
-  const agents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
-  const defaultAllows = Array.isArray(defaults) && (defaults.includes("*") || defaults.includes(agentId));
-  const callers = agents
-    .filter((agent) => {
-      const allow = agent?.subagents?.allowAgents;
-      return Array.isArray(allow) && (allow.includes("*") || allow.includes(agentId));
-    })
-    .map((agent) => agent.id)
-    .filter(Boolean);
-  return { defaultAllows, callers };
-}
-
-function mediaAgentIssues(agent, workspace) {
-  if (!agent) return ["agent missing"];
-  const issues = [];
-  if (!agent.workspace || !samePath(agent.workspace, workspace)) issues.push(`workspace is '${agent.workspace ?? "missing"}'`);
-  if (!Array.isArray(agent.skills) || agent.skills.length !== 0) issues.push("skills is not []");
-  const tools = agent.tools;
-  if (!tools || typeof tools !== "object" || Array.isArray(tools)) {
-    issues.push("tools config missing");
-  } else {
-    if (tools.profile !== DEFAULT_AGENT_TOOL_PROFILE) issues.push(`tools.profile is '${tools.profile ?? "missing"}'`);
-    const alsoAllow = Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
-    const missingTools = DEFAULT_AGENT_TOOL_ALLOW.filter((name) => !alsoAllow.includes(name));
-    if (missingTools.length > 0) issues.push(`tools.alsoAllow missing ${missingTools.join(", ")}`);
-    const legacyKeys = LEGACY_AGENT_TOOL_POLICY_KEYS.filter((key) => Object.hasOwn(tools, key));
-    if (legacyKeys.length > 0) issues.push(`legacy tools fields present (${legacyKeys.join(", ")}); run setup-agent --force to canonicalize`);
-  }
-  return issues;
 }
 
 function setupCommandPreview(opts) {
@@ -314,6 +148,7 @@ function setupCommandPreview(opts) {
 }
 
 function registerMediaGenerationCli({ program, config }, api) {
+  const rosterOptions = { runtimeVersion: api?.runtime?.version };
   const root = program
     .command("media-generation")
     .description("Set up and diagnose the OpenClaw media-generation agent template");
@@ -325,12 +160,15 @@ function registerMediaGenerationCli({ program, config }, api) {
     .option("--workspace <path>", "Media agent workspace path", DEFAULT_WORKSPACE)
     .option("--install-ideogram-bin", "Also check the optional Ideogram MCP wrapper and config under the media workspace", false)
     .action((opts) => {
-      const agents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
-      const agent = agents.find((entry) => entry?.id === opts.agentId);
+      const records = rosterAgentRecords(config, rosterOptions);
+      const agent = records.find(({ id }) => id === opts.agentId)?.agent;
+      const roster = readAgentRoster(config, rosterOptions);
       const templates = inspectTemplates({ workspace: opts.workspace, installIdeogramBin: Boolean(opts.installIdeogramBin) });
-      const allowance = hasSpawnAllowance(config, opts.agentId);
+      const legacyTools = legacyWorkspaceFiles({ workspace: opts.workspace }).filter((file) => existsSync(file.target));
+      const allowance = hasSpawnAllowance(config, opts.agentId, rosterOptions);
 
       console.log("Media Generation doctor");
+      console.log(`- Agent roster: ${roster.kind} (canonical agents.entries${roster.kind === "entries" ? "" : " compatibility"})`);
       console.log(`- Agent '${opts.agentId}': ${agent ? "configured" : "missing"}`);
       if (agent?.workspace) console.log(`  workspace in config: ${agent.workspace}`);
       const issues = mediaAgentIssues(agent, opts.workspace);
@@ -340,8 +178,15 @@ function registerMediaGenerationCli({ program, config }, api) {
       console.log(`- Expected workspace: ${opts.workspace}`);
       for (const file of templates) {
         const sourceLabel = file.kind === "ideogram" ? "source missing from plugin" : "template missing from plugin";
-        const status = !file.sourceExists ? sourceLabel : file.identical ? "present" : file.targetExists ? "different" : "missing";
+        const status = !file.sourceExists ? sourceLabel : file.identical ? "present" : file.targetExists && file.kind === "template" ? "customized (preserved)" : file.targetExists ? "different" : "missing";
         console.log(`- ${file.name}: ${status} (${file.target})`);
+      }
+      if (legacyTools.length > 0) {
+        console.log(`- TOOLS.md: legacy file present (${legacyTools[0].target}); preserved. Its notes are available in the new AGENTS.md template; review manually if this workspace has not been migrated.`);
+      }
+      const mediaDenials = findMediaToolDenials(config, opts.agentId, rosterOptions);
+      if (mediaDenials.length > 0) {
+        console.log(`- Media tool policy: warning; caller/inherited deny blocks ${mediaDenials.map(({ source, name }) => `${source}=${name}`).join(", ")}. Review manually; setup will not widen permissions.`);
       }
       if (allowance.defaultAllows) {
         console.log(`- Subagent allowlist: agents.defaults allows '${opts.agentId}'`);
@@ -351,7 +196,7 @@ function registerMediaGenerationCli({ program, config }, api) {
         console.log(`- Subagent allowlist: no caller allowlist for '${opts.agentId}' detected; add one if your OpenClaw restricts explicit agent targets.`);
       }
 
-      if (!agent || issues.length > 0 || templates.some((file) => !file.identical)) {
+      if (!agent || issues.length > 0 || templates.some((file) => !file.targetExists || !file.sourceExists || (file.kind !== "template" && !file.identical))) {
         console.log("");
         console.log("Suggested setup:");
         console.log(`  ${setupCommandPreview(opts)}`);
@@ -361,7 +206,7 @@ function registerMediaGenerationCli({ program, config }, api) {
 
   root
     .command("setup-agent")
-    .description("Create/update the media agent workspace and patch agents.list explicitly")
+    .description("Create/update the media agent workspace and patch the configured agent roster explicitly")
     .option("--agent-id <id>", "Media agent id", DEFAULT_AGENT_ID)
     .option("--workspace <path>", "Media agent workspace path", DEFAULT_WORKSPACE)
     .option("--allow-caller <id>", "Also allow this caller agent to spawn the media agent; repeatable", repeatOption, [])
@@ -376,6 +221,7 @@ function registerMediaGenerationCli({ program, config }, api) {
         allowCallers: opts.allowCaller,
         allowExistingAgents: Boolean(opts.allowExistingAgents),
         force: Boolean(opts.force),
+        runtimeVersion: rosterOptions.runtimeVersion,
       });
       if (plan.errors.length > 0) {
         for (const error of plan.errors) console.error(`Error: ${error}`);
@@ -391,7 +237,7 @@ function registerMediaGenerationCli({ program, config }, api) {
       });
       console.log(opts.dryRun ? "Planned media agent setup:" : "Applying media agent setup:");
       for (const action of templateActions) console.log(`- ${action.action} ${action.target}`);
-      console.log(plan.changed ? `- patch OpenClaw config agents.list for agent '${opts.agentId}' and media tool policy` : "- OpenClaw config already contains the requested media agent setup");
+      console.log(plan.changed ? `- patch OpenClaw config agents.${plan.kind} for agent '${opts.agentId}' and media tool policy` : "- OpenClaw config already contains the requested media agent setup");
       if (opts.allowCaller.length > 0) console.log(`- requested caller allowlist update(s): ${opts.allowCaller.join(", ")}`);
       if (opts.allowExistingAgents) console.log("- requested caller allowlist update: all existing agents");
 
@@ -417,10 +263,12 @@ function registerMediaGenerationCli({ program, config }, api) {
               allowCallers: opts.allowCaller,
               allowExistingAgents: Boolean(opts.allowExistingAgents),
               force: Boolean(opts.force),
+              runtimeVersion: rosterOptions.runtimeVersion,
             });
             if (livePlan.errors.length > 0) throw new Error(livePlan.errors.join("\n"));
             draft.agents ??= {};
-            draft.agents.list = livePlan.patch.agents.list;
+            if (livePlan.kind === "entries") draft.agents.entries = livePlan.patch.agents.entries;
+            else draft.agents.list = livePlan.patch.agents.list;
           },
         });
       }
